@@ -31,7 +31,7 @@ def match(pattern, s):
     return _regexp_compile_cache[pattern].match(s)
 
 
-def classify_file_extension(filename):
+def get_file_extension(filename):
     extension = filename[filename.rfind('.') + 1:]
     if extension in C_HEADERS_EXTENSION:
         return FileExtension.C_HEADER
@@ -46,6 +46,7 @@ def classify_file_extension(filename):
 
 
 class Context():
+
     def __init__(self):
         pass
 
@@ -62,46 +63,62 @@ class Context():
 def load_options(opt_file):
     return json.load(open(opt_file))
 
-
 whole_header_check_funcs = []
 whole_file_check_funcs = []
 line_header_check_funcs = []
 line_file_check_funcs = []
 
+hooks = {
+    "init": [],
+    "fini": []
+}
 
-def whole_header_checks(lines, filename, extension, context):
-    for fun in whole_header_check_funcs:
+
+def check_lines(lines, filename, extension, context, funcs):
+    for fun in funcs:
         fun(lines, filename, extension, context)
 
 
-def whole_file_checks(lines, filename, extension, context):
-    for fun in whole_file_check_funcs:
-        fun(lines, filename, extension, context)
-
-
-def line_header_checks(lines, filename, extension, context):
+def check_line(lines, filename, extension, context, funcs):
     for line_num,  line in enumerate(lines):
         for fun in line_header_check_funcs:
             fun(line, line_num, filename, extension, context)
 
 
-def line_file_checks(lines, filename, extension, context):
-    for line_num,  line in enumerate(lines):
-        for fun in line_file_check_funcs:
-            fun(line, line_num, filename, extension, context)
+def check_header_lines(lines, filename, extension, context):
+    check_lines(lines, filename, extension, context, whole_header_check_funcs)
+
+
+def check_file_lines(lines, filename, extension, context):
+    check_lines(lines, filename, extension, context, whole_file_check_funcs)
+
+
+def check_header_line(lines, filename, extension, context):
+    check_line(lines, filename, extension, context, line_header_check_funcs)
+
+
+def check_file_line(lines, filename, extension, context):
+    check_line(lines, filename, extension, context, line_file_check_funcs)
 
 
 def process_file(filename, context):
-    extension = classify_file_extension(filename)
+    extension = get_file_extension(filename)
     if extension == FileExtension.UNKNOWN:
         return
     lines = codecs.open(filename, 'r', 'utf8', 'replace').read().split('\n')
-    if extension == FileExtension.C_HEADER or extension == FileExtension.CPP_HEADER:
-        whole_header_checks(lines, filename, extension, context)
-        line_header_checks(lines, filename, extension, context)
+    for fun in hooks['init']:
+        fun(lines, filename, extension, context)
+
+    if extension == FileExtension.C_HEADER\
+       or extension == FileExtension.CPP_HEADER:
+        check_header_lines(lines, filename, extension, context)
+        check_header_line(lines, filename, extension, context)
     else:
-        whole_file_checks(lines, filename, extension, context)
-        line_file_checks(lines, filename, extension, context)
+        check_file_lines(lines, filename, extension, context)
+        check_file_line(lines, filename, extension, context)
+
+    for fun in hooks['fini']:
+        fun(lines, filename, extension, context)
 
 
 FileExtension = Enum("FileExtension",
@@ -114,6 +131,8 @@ def load_plugins():
     for file in glob.glob("*.py"):
         mod_name = file[:file.rfind('.')]
         mod = importlib.import_module("plugins." + mod_name)
+        if "add_hooks" in dir(mod):
+            mod.add_hooks(hooks)
         if "get_options" in dir(mod):
             mod.get_options(context.options())
         if "register" in dir(mod):
